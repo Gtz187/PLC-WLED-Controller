@@ -1,0 +1,206 @@
+﻿FUNCTION_BLOCK "fbWledCtrl"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+VAR_INPUT 
+    // No inputs currently required - logic based on InOut "Light"
+END_VAR
+
+VAR_OUTPUT
+    ERROR       : Bool;             // Error flag (e.g., array index out of bounds)
+    TriggerSend : Bool;             // Trigger signal for communication block (TSEND)
+    SendArray   : Array[0..255] OF Char; // Prepared JSON payload for WLED
+    LEN         : Int;              // Exact length of the payload
+END_VAR
+
+VAR_IN_OUT
+    WLED       : "udtWlecCTRL"; // Control interface and status data
+END_VAR
+
+VAR
+    sFirstCycle : Bool := TRUE;      // Internal flag for first scan initialization
+    sColors     : Array[#COLOR_ARRAY_LOW..#COLOR_ARRAY_MAX] OF String[13]; // Static color table
+    sLightOld   : "udtWlecCTRL"; // Storage for edge detection (change-of-state)
+    instTimerUpdate {S7_SETPOINT := 'True'; InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME; // Cyclic update heartbeat
+    sUpdate     : Bool;              // Internal trigger after watchdog timeout
+END_VAR
+
+VAR_TEMP
+    tSendString    : String;           // Local string for concatenation
+    tLen           : Int;              // Temporary length calculation
+    tIndex         : Int;              // Loop iterator
+    tSendArray     : Array[0..255] OF Char; // Buffer for string-to-char conversion
+    tStringArray   : Array[0..#STRING_ELEMENTS] OF String[16]; // Array for modular JSON assembly
+    tSx            : USInt;            // Local copy of effect speed
+    tIx            : USInt;            // Local copy of effect intensity
+    tColor         : Array[0..2] OF USInt; // Mapped color indices
+END_VAR
+
+VAR CONSTANT
+    STRING_ELEMENTS    : Int := 14;    // Number of segments in the JSON array
+    COLOR_ARRAY_LOW    : USInt := 0;   // Lower bound of color lookup table
+    COLOR_ARRAY_MAX    : USInt := 20;  // Upper bound of color lookup table
+END_VAR
+
+
+BEGIN
+	(********************************************************************************
+	* Block:       fbWledInterface
+	* Family:      Communication
+	* Version:     V1.0.0
+	* Author:      G. Jacob
+	* Description: WLED Integration for S7-1200/1500 via JSON-UDP
+	********************************************************************************)
+	// Supported Effects (Example IDs):
+	// 0: Solid (1 Color)
+	// 1: Blink (2 Color)
+	// 2: Breathe (1 Color)
+	// 45: Fire Flicker (1 Color)
+	// 50: Two Dots (3 Colors)
+	// 98: Percent (2 Colors)
+	// 101: Loading   
+	  
+	REGION FirstCycle
+	    // Initialize color lookup table on first scan
+	    IF #sFirstCycle THEN
+	        REGION Colors
+	            #sColors[0]  := '[0,0,0]';       // OFF (Black)
+	            #sColors[1]  := '[255,0,0]';     // Red (Error)
+	            #sColors[2]  := '[0,255,0]';     // Green (OK)
+	            #sColors[3]  := '[0,0,255]';     // Blue (Auto)
+	            #sColors[4]  := '[255,255,0]';   // Yellow (Warning)
+	            #sColors[5]  := '[255,165,0]';   // Orange
+	            #sColors[6]  := '[0,255,255]';   // Cyan
+	            #sColors[7]  := '[255,0,255]';   // Magenta
+	            #sColors[8]  := '[255,255,255]'; // White (Neutral)
+	            #sColors[9]  := '[255,240,200]'; // Warm White
+	            #sColors[10] := '[128,0,255]';   // Violet
+	            #sColors[11] := '[0,255,127]';   // Spring Green
+	            #sColors[12] := '[255,20,147]';  // Deep Pink
+	            #sColors[13] := '[173,216,230]'; // Light Blue
+	            #sColors[14] := '[255,215,0]';   // Gold
+	            #sColors[15] := '[128,128,128]'; // Grey
+	            #sColors[16] := '[255,127,80]';  // Coral
+	            #sColors[17] := '[0,128,128]';   // Teal
+	            #sColors[18] := '[139,69,19]';   // Brown
+	            #sColors[19] := '[75,0,130]';    // Indigo
+	            #sColors[20] := '[255,255,255]'; // Reserve / Full Power
+	        END_REGION
+	    END_IF;
+	END_REGION
+	
+	REGION Check New Data
+	    // Heartbeat timer for cyclic update (Watchdog)
+	    #instTimerUpdate.TON(IN:=NOT #sUpdate,
+	                   PT:=T#1s,
+	                   Q=>#sUpdate);
+	
+	    // Detect changes or force update after 1s
+	    IF #sLightOld = #WLED   AND NOT #sUpdate THEN
+	        #TriggerSend := false;
+	        RETURN;
+	    END_IF;
+	    
+	    // Reset update trigger and signal new transmission
+	    RESET_TIMER(#instTimerUpdate);   
+	    #TriggerSend := true;
+	END_REGION    
+	
+	REGION CHECK ARRAY Bound
+	    // Validate color indices to prevent CPU access errors
+	    IF #WLED  .Color[0] > #COLOR_ARRAY_MAX OR
+	       #WLED  .Color[1] > #COLOR_ARRAY_MAX OR
+	       #WLED  .Color[2] > #COLOR_ARRAY_MAX THEN
+	        #ERROR := TRUE;
+	        #TriggerSend := FALSE;
+	        RETURN;
+	    ELSE
+	        #ERROR := FALSE;
+	    END_IF;
+	END_REGION
+	
+	REGION Effect Configuration Colors
+	    // Default color mapping
+	    #tColor[0] := #WLED  .Color[0];
+	    #tColor[1] := #WLED  .Color[1];
+	    #tColor[2] := #WLED  .Color[2];
+	    
+	    CASE #WLED  .Effect.No OF
+	        50: // Two Dots: Rearrange colors for specific effect logic
+	            #tColor[1] := #WLED  .Color[0];
+	            #tColor[2] := #WLED  .Color[1];
+	            #tColor[0] := #WLED  .Color[2]; // Background
+	            
+	            // Fallback for dark pixels
+	            IF #tColor[1] = 0 THEN #tColor[1] := #tColor[0]; END_IF;
+	            IF #tColor[2] = 0 THEN #tColor[2] := #tColor[0]; END_IF;
+	    END_CASE;
+	END_REGION
+	
+	REGION Effect Configuration Speed/Intensity
+	    #tSx := #WLED  .Effect.Sx;
+	    #tIx := #WLED  .Effect.Ix;
+	    
+	    // Default values for speed and intensity if set to 0
+	    IF #tSx = 0 THEN #tSx := 128; END_IF;
+	    
+	    // Intensity handling: 0 is valid for percent effect (98), otherwise default to 128
+	    IF #tIx = 0 AND #WLED  .Effect.No <> 98 THEN
+	        #tIx := 128;
+	    END_IF;
+	END_REGION
+	
+	REGION Concatenate JSON String
+	    // Clear temporary string array
+	    FOR #tIndex := 0 TO #STRING_ELEMENTS DO
+	        #tStringArray[#tIndex] := '';
+	    END_FOR;
+	
+	    IF #WLED  .Power THEN
+	        // Build JSON for "Power ON" with effect data
+	        #tStringArray[0] := '{';
+	        #tStringArray[1] := '"on":true,';
+	        #tStringArray[2] := '"seg":[{"fx":';
+	        
+	        VAL_STRG(IN:=#WLED  .Effect.No, SIZE:=0, PREC:=0, FORMAT:=0, P:=1, OUT=>#tStringArray[3]);
+	        #tStringArray[4] := ',"sx":';
+	        VAL_STRG(IN:=#tSx, SIZE:=0, PREC:=0, FORMAT:=0, P:=1, OUT=>#tStringArray[5]);
+	        #tStringArray[6] := ',"ix":';
+	        VAL_STRG(IN:=#tIx, SIZE:=0, PREC:=0, FORMAT:=0, P:=1, OUT=>#tStringArray[7]);
+	        
+	        #tStringArray[8]  := ',"col":[';
+	        #tStringArray[9]  := #sColors[#tColor[0]];
+	        #tStringArray[10] := ',';
+	        #tStringArray[11] := #sColors[#tColor[1]];
+	        #tStringArray[12] := ',';
+	        #tStringArray[13] := #sColors[#tColor[2]];
+	        #tStringArray[14] := ']}]}';
+	    ELSE
+	        // Simple JSON for "Power OFF"
+	        #tStringArray[0] := '{"on":false}';
+	    END_IF;
+	END_REGION
+	
+	REGION String Assembly
+	    #tSendString := '';
+	    FOR #tIndex := 0 TO #STRING_ELEMENTS DO
+	        #tSendString := CONCAT(IN1:= #tSendString, IN2:= #tStringArray[#tIndex]);
+	    END_FOR;
+	END_REGION
+	
+	REGION Write To Output
+	    // Convert String to Char Array for UDP transmission
+	    #tLen := LEN(#tSendString);
+	    #LEN := #tLen;
+	    
+	    FOR #tIndex := 1 TO #tLen DO
+	        #SendArray[#tIndex - 1] := #tSendString[#tIndex];
+	    END_FOR;
+	END_REGION
+	
+	REGION Housekeeping
+	    // Store current state for next cycle's comparison
+	    #sLightOld := #WLED  ;
+	    #sFirstCycle := false;
+	END_REGION
+END_FUNCTION_BLOCK
+

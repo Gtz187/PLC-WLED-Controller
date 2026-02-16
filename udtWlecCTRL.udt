@@ -1,0 +1,14 @@
+﻿TYPE "udtWlecCTRL"
+VERSION : 0.1
+   STRUCT
+      Power : Bool;
+      Effect : Struct
+         No : USInt;   // Number
+         Sx : USInt;   // Speed
+         Ix : USInt;   // Intensity
+      END_STRUCT;
+      Color : Array[0..2] of USInt;
+   END_STRUCT;
+
+END_TYPE
+
