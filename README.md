@@ -19,3 +19,5 @@ Import `udtWledCtrl.udt` and `fbWledCtrl.scl`. Use the `TriggerSend` output to d
 Configuration TSEND
 <img width="1098" height="629" alt="grafik" src="https://github.com/user-attachments/assets/f6197ce1-76cf-4e44-860d-2fe733413a42" />
 
+✍️ Author
+G. Jacob | Automation Engineering 🛠️
