@@ -1,0 +1,15 @@
+TYPE "udtWledStripe"
+VERSION : 0.1
+   STRUCT
+      Start : UInt;   // First LED index of this zone (0-based, WLED-style)
+      Len   : UInt;   // Number of LEDs in this zone; 0 = zone unused/inactive
+      Power : Bool;
+      Effect : Struct
+         No : USInt;   // Effect number (WLED FX ID)
+         Sx : USInt;   // Speed
+         Ix : USInt;   // Intensity
+      END_STRUCT;
+      Color : Array[0..2] of USInt;   // Color table indices (see fbWledCtrl sColors)
+   END_STRUCT;
+
+END_TYPE

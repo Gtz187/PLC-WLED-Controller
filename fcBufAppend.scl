@@ -1,0 +1,46 @@
+FUNCTION "fcBufAppend" : Void
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+VAR_INPUT
+    Frag : String[16];   // Short fragment to append, e.g. a piece built with VAL_STRG
+END_VAR
+
+VAR_IN_OUT
+    Pos      : Int;                       // Running write position (0-based); advanced in place
+    Buffer   : Array[0..1199] OF Char;     // MUST match BUFFER_SIZE-1 in fbWledCtrl
+END_VAR
+
+VAR_OUTPUT
+    Overflow : Bool;    // TRUE if the fragment did not fit; Buffer/Pos are left unchanged
+END_VAR
+
+VAR_TEMP
+    tLen : Int;
+    tIdx : Int;
+END_VAR
+
+BEGIN
+    (********************************************************************************
+    * Block:       fcBufAppend
+    * Purpose:     Appends a short STRING's characters onto a byte buffer at a running
+    *              write position, bounds-checked. Used instead of building one huge
+    *              STRING and converting it afterwards, because the classic S7 STRING
+    *              type is hard-capped at 254 characters - too short for an 8-zone
+    *              WLED JSON payload (~1000 bytes worst case).
+    * Note:        The 1200 bound below is a literal, not the BUFFER_SIZE constant in
+    *              fbWledCtrl, because VAR_IN_OUT array parameters need a fixed size at
+    *              compile time on classic SCL (ARRAY[*] bewusst weggelassen fuer
+    *              1200/1500-Portabilitaet). Aendert sich BUFFER_SIZE, hier mitziehen.
+    ********************************************************************************)
+    #tLen := LEN(#Frag);
+    IF #Pos < 0 OR #Pos + #tLen > 1200 THEN
+        #Overflow := TRUE;
+        RETURN;
+    END_IF;
+
+    FOR #tIdx := 1 TO #tLen DO
+        #Buffer[#Pos] := #Frag[#tIdx];
+        #Pos := #Pos + 1;
+    END_FOR;
+    #Overflow := FALSE;
+END_FUNCTION
